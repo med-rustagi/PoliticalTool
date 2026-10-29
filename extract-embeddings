@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Extract and save TEXT embeddings for every caption in clean_text.csv.
+
+Setup:  pip3 install torch transformers numpy pandas
+Test:   python3 extract_text_embeddings.py --input clean/clean_text.csv --out-dir embeddings/ --limit 50
+Full:   python3 extract_text_embeddings.py --input clean/clean_text.csv --out-dir embeddings/
+
+Models (--model):
+  openai/clip-vit-base-patch32   DEFAULT. CLIP text encoder. Its embeddings live in the same
+                                 space as CLIP IMAGE embeddings, which makes combining with
+                                 image work easy. Reads at most 77 tokens (longer captions are cut).
+  any other Hugging Face encoder (e.g. roberta-base, bert-base-uncased): mean-pooled token
+                                 embeddings, up to --max-length tokens (default 512 cap).
+                                 Usually better for text-only analysis of longer captions.
+
+Outputs in --out-dir:
+  text_embs.npy        [N, D] float32. Row i = embedding of post embedding_ids[i]
+  embedding_ids.csv    column post_id, same row order as text_embs.npy
+  embedding_meta.json  model, embedding size, counts, truncation stats, device
+
+Embeddings are L2-normalized by default; use --no-normalize to keep raw values.
+"""
+import argparse
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+from transformers import AutoModel, AutoTokenizer, CLIPModel
+
+
+def pick_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"  # Apple Silicon Macs
+    return "cpu"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", required=True, help="clean_text.csv")
+    ap.add_argument("--out-dir", default="embeddings")
+    ap.add_argument("--model", default="openai/clip-vit-base-patch32")
+    ap.add_argument("--max-length", type=int, default=None)
+    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--limit", type=int, default=None, help="only the first N rows (quick test)")
+    ap.add_argument("--no-normalize", action="store_true")
+    a = ap.parse_args()
+
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(a.input, dtype={"post_id": str})
+    df["caption"] = df["caption"].fillna("").astype(str)
+    if a.limit:
+        df = df.head(a.limit)
+
+    is_clip = "clip" in a.model.lower()
+    device = pick_device()
+    tok = AutoTokenizer.from_pretrained(a.model)
+    model = (CLIPModel if is_clip else AutoModel).from_pretrained(a.model).to(device).eval()
+    max_len = a.max_length or (77 if is_clip else min(512, tok.model_max_length))
+    print("Rows: %d | device: %s | model: %s | max tokens: %d" % (len(df), device, a.model, max_len))
+
+    ids, chunks = [], []
+    n_trunc = 0
+    t0 = time.time()
+    with torch.no_grad():
+        for start in range(0, len(df), a.batch_size):
+            batch = df.iloc[start:start + a.batch_size]
+            caps = batch["caption"].tolist()
+            n_trunc += sum(len(x) > max_len for x in tok(caps, truncation=False, verbose=False)["input_ids"])
+            enc = tok(caps, return_tensors="pt", padding=True, truncation=True, max_length=max_len)
+            enc = {k: v.to(device) for k, v in enc.items()}
+            if is_clip:
+                feats = model.get_text_features(input_ids=enc["input_ids"],
+                                                attention_mask=enc["attention_mask"])
+            else:
+                hidden = model(**enc).last_hidden_state              # [B, T, D]
+                mask = enc["attention_mask"].unsqueeze(-1).to(hidden.dtype)
+                feats = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1)  # mean over real tokens
+            if not a.no_normalize:
+                feats = feats / feats.norm(dim=-1, keepdim=True)
+            chunks.append(feats.float().cpu().numpy())
+            ids.extend(batch["post_id"].tolist())
+            print("  %d/%d rows (%.0fs)" % (start + len(batch), len(df), time.time() - t0), flush=True)
+
+    if not ids:
+        raise SystemExit("No rows to embed. Check your input file.")
+
+    T = np.concatenate(chunks).astype(np.float32)
+    assert len(ids) == len(T)
+    np.save(out / "text_embs.npy", T)
+    pd.DataFrame({"post_id": ids}).to_csv(out / "embedding_ids.csv", index=False)
+    meta = {"model": a.model, "dim": int(T.shape[1]), "n_embedded": len(ids),
+            "max_tokens": int(max_len), "n_captions_truncated": int(n_trunc),
+            "normalized": not a.no_normalize, "device": device}
+    (out / "embedding_meta.json").write_text(json.dumps(meta, indent=2))
+    print("\nDone.", json.dumps(meta, indent=2))
+
+
+if __name__ == "__main__":
+    main()
