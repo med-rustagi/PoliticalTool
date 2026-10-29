@@ -1,16 +1,4 @@
-#!/usr/bin/env python3
-"""Text-only cleaning of Instagram captions: normalize text, drop bad rows and duplicates,
-and make a group-aware train/val/test split (no account appears in more than one split).
 
-Example:
-  python3 clean_text.py --input raw.csv --id-col shortcode --text-col caption \
-      --label-col label --group-col username --out-dir clean/
-
-Outputs in --out-dir:
-  clean_text.csv   post_id, caption, n_chars, split, [label], [group]
-  drop_log.csv     every removed post and the reason
-  report.txt       counts, split sizes, label balance, caption length stats
-"""
 import argparse
 import re
 import unicodedata
