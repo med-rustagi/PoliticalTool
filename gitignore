@@ -1,0 +1,25 @@
+# ---- Data: never commit scraped Instagram data, images, or embeddings ----
+data/
+clean/
+embeddings/
+loader_out/
+images/
+*.npy
+*.pt
+
+# ---- Instagram login / session files and secrets ----
+session-*
+.instaloader*
+*.session
+.env
+*.key
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ---- Mac ----
+.DS_Store
