@@ -1,25 +1,3 @@
-#!/usr/bin/env python3
-"""Extract and save TEXT embeddings for every caption in clean_text.csv.
-
-Setup:  pip3 install torch transformers numpy pandas
-Test:   python3 extract_text_embeddings.py --input clean/clean_text.csv --out-dir embeddings/ --limit 50
-Full:   python3 extract_text_embeddings.py --input clean/clean_text.csv --out-dir embeddings/
-
-Models (--model):
-  openai/clip-vit-base-patch32   DEFAULT. CLIP text encoder. Its embeddings live in the same
-                                 space as CLIP IMAGE embeddings, which makes combining with
-                                 image work easy. Reads at most 77 tokens (longer captions are cut).
-  any other Hugging Face encoder (e.g. roberta-base, bert-base-uncased): mean-pooled token
-                                 embeddings, up to --max-length tokens (default 512 cap).
-                                 Usually better for text-only analysis of longer captions.
-
-Outputs in --out-dir:
-  text_embs.npy        [N, D] float32. Row i = embedding of post embedding_ids[i]
-  embedding_ids.csv    column post_id, same row order as text_embs.npy
-  embedding_meta.json  model, embedding size, counts, truncation stats, device
-
-Embeddings are L2-normalized by default; use --no-normalize to keep raw values.
-"""
 import argparse
 import json
 import time
