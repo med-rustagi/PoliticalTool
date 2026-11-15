@@ -1,0 +1,77 @@
+import time
+import requests
+import pandas as pd
+from pathlib import Path
+
+OUTPUT = Path("data/imported")
+OUTPUT.mkdir(parents=True, exist_ok=True)
+
+API = "https://datasets-server.huggingface.co/rows"
+
+DATASETS = [
+    ("JyotiNayak/political_ideologies", "ideology_statements_sample.csv"),
+    ("mlburnham/PoliStance_Affect_QT", "stance_quotes_sample.csv"),
+]
+
+def fetch_batch(dataset, offset, length=100):
+    params = {
+        "dataset": dataset,
+        "config": "default",
+        "split": "train",
+        "offset": offset,
+        "length": length,
+    }
+
+    for attempt in range(5):
+        try:
+            response = requests.get(API, params=params, timeout=90)
+            response.raise_for_status()
+            return [item["row"] for item in response.json()["rows"]]
+        except requests.RequestException as error:
+            print(f"Attempt {attempt + 1}/5 failed: {error}")
+            if attempt == 4:
+                raise
+            time.sleep(3 * (attempt + 1))
+
+for dataset, filename in DATASETS:
+    print(f"\nDownloading {dataset}")
+    all_rows = []
+
+    for offset in range(0, 300, 100):
+        try:
+            batch = fetch_batch(dataset, offset)
+            if not batch:
+                break
+
+            all_rows.extend(batch)
+            df = pd.DataFrame(all_rows)
+
+            if dataset == "JyotiNayak/political_ideologies":
+                df["label_name"] = df["label"].map({
+                    0: "conservative",
+                    1: "liberal",
+                })
+                df["source_type"] = "generated_ideology_statement"
+            else:
+                df["label_name"] = df["stance"].map({
+                    -1: "critical",
+                    0: "neutral",
+                    1: "supportive",
+                })
+                df["source_type"] = "human_labeled_quote_tweet"
+
+            df["source_dataset"] = dataset
+            df.to_csv(OUTPUT / filename, index=False)
+
+            print(f"Saved {len(df)} rows (through offset {offset})")
+
+            if len(batch) < 100:
+                break
+
+        except Exception as error:
+            print("Download stopped:", error)
+            break
+
+    print("Final saved rows:", len(all_rows))
+
+print("\nFinished.")
